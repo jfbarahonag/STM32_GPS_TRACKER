@@ -31,6 +31,7 @@ typedef enum _but_events_ {
 }but_events_t;
 
 typedef struct _but_fsm_ {
+	uint16_t time_being_pressed;
 	uint16_t countdown;
 	but_states_t state;
 	but_events_t event;

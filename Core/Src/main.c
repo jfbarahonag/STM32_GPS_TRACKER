@@ -88,8 +88,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 			button.event = EVT_BUT_TIMEOUT;
 		}
 	}
-
-
 }
 
 

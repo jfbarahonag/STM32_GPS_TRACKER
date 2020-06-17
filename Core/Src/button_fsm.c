@@ -14,6 +14,7 @@
 #define LED_GPIO_Port 	GPIOA
 /* ------------------------------------------ */
 void but_fsm_init ( but_fsm_t *fsm ) {
+	fsm->time_being_pressed = 0;
 	fsm->countdown = 0;
 	fsm->event = EVT_BUT_NO_EVT;
 	fsm->state = STATE_BUT_WAITING;
@@ -52,10 +53,12 @@ void but_fsm_run ( but_fsm_t *fsm ) {
 				if (!but_pressed()) {
 					fsm->state = STATE_BUT_UPDATE;
 					fsm->start_countdown = true;
+					fsm->time_being_pressed = 0; /* Reset count when is released */
 				} else {
 					fsm->state = STATE_BUT_WAIT_RELEASE;
 					fsm->start_countdown = true;
-					HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 1);
+					fsm->time_being_pressed++; /* count seconds while it is being pressed (NON BLOCKING MODE)
+												* and update each TICK value [msecs] */
 				}
 			}
 			break;
@@ -63,7 +66,6 @@ void but_fsm_run ( but_fsm_t *fsm ) {
 		case STATE_BUT_UPDATE:
 			if ( fsm->event == EVT_BUT_TIMEOUT ) {
 				fsm->state = STATE_BUT_WAITING;
-				HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, 0);
 			}
 			break;
 
