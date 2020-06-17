@@ -1,0 +1,3 @@
+button_fsm.c:16:6:but_fsm_init	16	static
+button_fsm.c:24:8:but_pressed	8	static
+button_fsm.c:28:6:but_fsm_run	16	static
