@@ -24,15 +24,63 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "button_fsm.h"
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum _tracker_states_ {
+	STATE_TRACKER_IDLE,
+	STATE_TRACKER_WAIT_FOR_REQUEST_GPS,
+	STATE_TRACKER_REQUEST_GPS,
+	STATE_TRACKER_WAITING_GPS,
+	STATE_TRACKER_RECEIVED_GPS,
+	STATE_TRACKER_GSM_SENDING,
+}tracker_states_t;
 
+typedef enum _tracker_events_ {
+	EVT_TRACKER_NO_EVT,
+	EVT_TRACKER_ALERT_ON,
+	EVT_TRACKER_TIMEOUT_REQUEST_GPS,
+	EVT_TRACKER_GPS_REQUEST_SENT,
+	EVT_TRACKER_TIMEOUT_FAIL,
+	EVT_TRACKER_GPS_RESPONSE_RECEIVED,
+	EVT_TRACKER_NO_CORRECT_DATA,
+	EVT_TRACKER_CORRECT_DATA,
+	EVT_TRACKER_TIMEOUT_REQUEST_GPS_AGAIN,
+	EVT_TRACKER_ALERT_OFF,
+}tracker_events_t;
+
+typedef union {
+	struct {
+		bool_t new_event:1;
+		bool_t alert_on:1;
+		bool_t alert_off:1;
+		bool_t start_counter_request:1;
+		bool_t start_counter_fail:1;
+	};
+	struct {
+		uint8_t all_flags:5;
+	};
+
+}flags_t;
+
+typedef struct _tracker_fsm_ {
+	uint32_t counter_request;
+	uint16_t counter_fail;
+	uint16_t *time;
+	tracker_states_t state;
+	tracker_events_t event;
+	flags_t flag;
+
+
+}tracker_fsm_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define TIME_TO_START_SYSTEM	(	   5000		)
+#define TIME_NEEDED_TO_ALARM	(		200		)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -49,6 +97,7 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 but_fsm_t button;
+tracker_fsm_t tracker;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -59,7 +108,8 @@ static void MX_TIM3_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-
+void tracker_fsm_init ( tracker_fsm_t *fsm, but_fsm_t *but );
+void tracker_fsm_run ( tracker_fsm_t *fsm );
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -75,7 +125,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 
-	if(htim->Instance == TIM2) {
+	if(htim->Instance == TIM2) { /* ONLY FOR BUTTON */
 		if (button.start_countdown == true) {
 			button.countdown++;
 		}
@@ -87,6 +137,28 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 			button.new_event = true;
 			button.event = EVT_BUT_TIMEOUT;
 		}
+	}
+
+	if (htim->Instance == TIM3) { /* ONLY FOR TRACKER */
+		if ( tracker.state == STATE_TRACKER_IDLE ) {
+			if ( *tracker.time >= TIME_NEEDED_TO_ALARM ) { //two seconds
+				tracker.event = EVT_TRACKER_ALERT_ON;
+				tracker.flag.new_event = true;
+			}
+
+		}
+
+		if ( tracker.flag.start_counter_request == true ) {
+			tracker.counter_request++;
+		} else {
+			tracker.counter_request = 0;
+		}
+
+		if ( tracker.counter_request >= TIME_TO_START_SYSTEM ) {
+			tracker.event = EVT_TRACKER_TIMEOUT_REQUEST_GPS;
+			tracker.flag.new_event = true;
+		}
+
 	}
 }
 
@@ -129,6 +201,7 @@ int main(void)
 	HAL_TIM_Base_Start_IT(&htim2);
 	HAL_TIM_Base_Start_IT(&htim3);
 	but_fsm_init(&button);
+	tracker_fsm_init(&tracker, &button);
 	/* USER CODE END 2 */
 
 	/* Infinite loop */
@@ -136,6 +209,8 @@ int main(void)
 	while (1)
 	{
 		but_fsm_run(&button);
+		tracker_fsm_run(&tracker);
+
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -388,7 +463,64 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void tracker_fsm_init ( tracker_fsm_t *fsm, but_fsm_t *but ) {
+	fsm->state = STATE_TRACKER_IDLE;
+	fsm->event = EVT_TRACKER_NO_EVT;
+	fsm->time = &but->time_being_pressed;
+	fsm->counter_fail = 0;
+	fsm->counter_request = 0;
+	fsm->flag.all_flags = 0x00;
+}
 
+void tracker_fsm_run ( tracker_fsm_t *fsm ) {
+	if( fsm->flag.new_event == true ) {
+		fsm->flag.new_event = false;
+
+		switch (fsm->state) {
+
+		case STATE_TRACKER_IDLE:
+			if (fsm->event == EVT_TRACKER_ALERT_ON) {
+				HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 1);
+				HAL_UART_Transmit(&huart1, (uint8_t *)"ATE0\r", strlen("ATE0\r"), 100); /* turn off echo mode */
+				HAL_UART_Transmit(&huart1, (uint8_t *)"AT+QGNSSC=1\r", strlen("AT+QGNSSC=1\r"), 100); /* turn on GNSS module */
+				fsm->flag.start_counter_request = true;
+				fsm->state = STATE_TRACKER_WAIT_FOR_REQUEST_GPS;
+			}
+			break;
+
+		case STATE_TRACKER_WAIT_FOR_REQUEST_GPS:
+			if (fsm->event == EVT_TRACKER_TIMEOUT_REQUEST_GPS) {
+				HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 0);
+				fsm->flag.start_counter_request = false;
+
+
+				fsm->state = STATE_TRACKER_REQUEST_GPS;
+			}
+			break;
+
+		case STATE_TRACKER_REQUEST_GPS:
+
+			break;
+
+		case STATE_TRACKER_WAITING_GPS:
+
+			break;
+
+		case STATE_TRACKER_RECEIVED_GPS:
+
+			break;
+
+		case STATE_TRACKER_GSM_SENDING:
+
+			break;
+
+		default: /* ERROR */
+
+			while(1);
+			break;
+		}
+	}
+}
 /* USER CODE END 4 */
 
 /**
@@ -412,7 +544,7 @@ void Error_Handler(void)
  * @retval None
  */
 void assert_failed(uint8_t *file, uint32_t line)
-{ 
+{
 	/* USER CODE BEGIN 6 */
 	/* User can add his own implementation to report the file name and line number,
      tex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
