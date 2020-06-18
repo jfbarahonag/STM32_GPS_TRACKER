@@ -32,8 +32,8 @@
 typedef enum _tracker_states_ {
 	STATE_TRACKER_IDLE,
 	STATE_TRACKER_WAIT_FOR_REQUEST_GPS,
-	STATE_TRACKER_REQUEST_GPS,
-	STATE_TRACKER_WAITING_GPS,
+	STATE_TRACKER_SEND_REQUEST_GPS,
+	STATE_TRACKER_WAITING_GPS_RESPONSE,
 	STATE_TRACKER_RECEIVED_GPS,
 	STATE_TRACKER_GSM_SENDING,
 }tracker_states_t;
@@ -50,6 +50,11 @@ typedef enum _tracker_events_ {
 	EVT_TRACKER_TIMEOUT_REQUEST_GPS_AGAIN,
 	EVT_TRACKER_ALERT_OFF,
 }tracker_events_t;
+#define SIZE	128
+typedef struct _uart_ {
+	uint8_t rx[SIZE];
+	uint8_t tx[SIZE];
+}uart_t;
 
 typedef union {
 	struct {
@@ -58,16 +63,19 @@ typedef union {
 		bool_t alert_off:1;
 		bool_t start_counter_request:1;
 		bool_t start_counter_fail:1;
+		bool_t start_to_request_nmea_data:1;
 	};
 	struct {
-		uint8_t all_flags:5;
+		uint8_t all_flags:6;
 	};
 
 }flags_t;
 
 typedef struct _tracker_fsm_ {
+	uart_t buff;
 	uint32_t counter_request;
 	uint16_t counter_fail;
+	uint16_t counter_request_nmea_data;
 	uint16_t *time;
 	tracker_states_t state;
 	tracker_events_t event;
@@ -122,6 +130,16 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 }
 
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == USART1) {
+		if (tracker.state == STATE_TRACKER_WAITING_GPS_RESPONSE) {
+			HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 1);
+			tracker.flag.start_to_request_nmea_data = false;
+			HAL_UART_Transmit_IT(&huart2, tracker.buff.rx, SIZE);
+		}
+	}
+}
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 
@@ -140,6 +158,20 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	}
 
 	if (htim->Instance == TIM3) { /* ONLY FOR TRACKER */
+
+		if ( tracker.flag.start_to_request_nmea_data == true ) {
+			tracker.counter_request_nmea_data++;
+		} else {
+			tracker.counter_request_nmea_data = 0;
+		}
+
+		if ( tracker.counter_request_nmea_data >= 1000 ) {
+			tracker.counter_request_nmea_data = 0;
+			HAL_UART_Transmit_IT(&huart1, (uint8_t *)"AT+QGNSSRD=\"NMEA/RMC\"\r", strlen("AT+QGNSSRD=\"NMEA/RMC\"\r"));
+			tracker.event = EVT_TRACKER_GPS_REQUEST_SENT;
+			tracker.flag.new_event = true;
+		}
+
 		if ( tracker.state == STATE_TRACKER_IDLE ) {
 			if ( *tracker.time >= TIME_NEEDED_TO_ALARM ) { //two seconds
 				tracker.event = EVT_TRACKER_ALERT_ON;
@@ -208,6 +240,7 @@ int main(void)
 	/* USER CODE BEGIN WHILE */
 	while (1)
 	{
+
 		but_fsm_run(&button);
 		tracker_fsm_run(&tracker);
 
@@ -464,9 +497,12 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 void tracker_fsm_init ( tracker_fsm_t *fsm, but_fsm_t *but ) {
+	fsm->buff.rx[SIZE-1] = '\0';
+	fsm->buff.tx[SIZE-1] = '\0';
 	fsm->state = STATE_TRACKER_IDLE;
 	fsm->event = EVT_TRACKER_NO_EVT;
 	fsm->time = &but->time_being_pressed;
+	fsm->counter_request_nmea_data = 0;
 	fsm->counter_fail = 0;
 	fsm->counter_request = 0;
 	fsm->flag.all_flags = 0x00;
@@ -485,24 +521,39 @@ void tracker_fsm_run ( tracker_fsm_t *fsm ) {
 				HAL_UART_Transmit(&huart1, (uint8_t *)"AT+QGNSSC=1\r", strlen("AT+QGNSSC=1\r"), 100); /* turn on GNSS module */
 				fsm->flag.start_counter_request = true;
 				fsm->state = STATE_TRACKER_WAIT_FOR_REQUEST_GPS;
+				HAL_UART_Receive_IT(&huart1, tracker.buff.rx, 70);
 			}
 			break;
 
 		case STATE_TRACKER_WAIT_FOR_REQUEST_GPS:
+
 			if (fsm->event == EVT_TRACKER_TIMEOUT_REQUEST_GPS) {
 				HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 0);
 				fsm->flag.start_counter_request = false;
+				fsm->flag.start_to_request_nmea_data = true;
+				HAL_UART_Receive_IT(&huart1, tracker.buff.rx, 70);
 
-
-				fsm->state = STATE_TRACKER_REQUEST_GPS;
+				fsm->state = STATE_TRACKER_SEND_REQUEST_GPS;
 			}
 			break;
 
-		case STATE_TRACKER_REQUEST_GPS:
+		case STATE_TRACKER_SEND_REQUEST_GPS:
 
+			if (fsm->event == EVT_TRACKER_GPS_REQUEST_SENT) { /* transition state */
+
+				fsm->state = STATE_TRACKER_WAITING_GPS_RESPONSE;
+
+			}
 			break;
 
-		case STATE_TRACKER_WAITING_GPS:
+		case STATE_TRACKER_WAITING_GPS_RESPONSE:
+
+			if (fsm->event == EVT_TRACKER_GPS_RESPONSE_RECEIVED) {
+
+			}
+			else if (fsm->event == EVT_TRACKER_GPS_REQUEST_SENT) { /* NOT RECEIVED */
+
+			}
 
 			break;
 
