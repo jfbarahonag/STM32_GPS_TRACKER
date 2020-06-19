@@ -13,6 +13,13 @@
 #include "stm32l4xx_hal.h"
 #include <stdbool.h>
 
+/* -Paste here #defines of button (led for testing) port & pin- */
+#define BUT_Pin 		GPIO_PIN_13
+#define BUT_GPIO_Port 	GPIOC
+
+#define LED_Pin 		GPIO_PIN_5
+#define LED_GPIO_Port 	GPIOA
+/* ------------------------------------------------------------ */
 typedef bool bool_t;
 
 typedef enum _but_states_ {

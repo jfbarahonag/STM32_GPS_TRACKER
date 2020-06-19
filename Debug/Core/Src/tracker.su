@@ -1,0 +1,7 @@
+tracker.c:12:6:tracker_prepare_communication	16	static
+tracker.c:21:6:tracker_send_request_to_gps	16	static
+tracker.c:28:6:tracker_process_data_received_from_gps	24	static
+tracker.c:34:6:tracker_set_event	16	static
+tracker.c:39:6:tracker_fsm_init	16	static
+tracker.c:53:6:tracker_fsm_run	16	static
+tracker.c:114:6:tracker_parse_nmea_data	40	static

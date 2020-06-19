@@ -6,12 +6,7 @@
  */
 #include"button_fsm.h"
 
-/* -Paste here #defines of button (led for testing) port & pin- */
-#define BUT_Pin 		GPIO_PIN_13
-#define BUT_GPIO_Port 	GPIOC
 
-#define LED_Pin 		GPIO_PIN_5
-#define LED_GPIO_Port 	GPIOA
 /* ------------------------------------------ */
 void but_fsm_init ( but_fsm_t *fsm ) {
 	fsm->time_being_pressed = 0;

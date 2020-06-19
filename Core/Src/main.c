@@ -23,72 +23,18 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "button_fsm.h"
-#include <string.h>
+
+#include "tracker.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef enum _tracker_states_ {
-	STATE_TRACKER_IDLE,
-	STATE_TRACKER_WAIT_FOR_REQUEST_GPS,
-	STATE_TRACKER_SEND_REQUEST_GPS,
-	STATE_TRACKER_WAITING_GPS_RESPONSE,
-	STATE_TRACKER_RECEIVED_GPS,
-	STATE_TRACKER_GSM_SENDING,
-}tracker_states_t;
 
-typedef enum _tracker_events_ {
-	EVT_TRACKER_NO_EVT,
-	EVT_TRACKER_ALERT_ON,
-	EVT_TRACKER_TIMEOUT_REQUEST_GPS,
-	EVT_TRACKER_GPS_REQUEST_SENT,
-	EVT_TRACKER_TIMEOUT_FAIL,
-	EVT_TRACKER_GPS_RESPONSE_RECEIVED,
-	EVT_TRACKER_NO_CORRECT_DATA,
-	EVT_TRACKER_CORRECT_DATA,
-	EVT_TRACKER_TIMEOUT_REQUEST_GPS_AGAIN,
-	EVT_TRACKER_ALERT_OFF,
-}tracker_events_t;
-#define SIZE	128
-typedef struct _uart_ {
-	uint8_t rx[SIZE];
-	uint8_t tx[SIZE];
-}uart_t;
-
-typedef union {
-	struct {
-		bool_t new_event:1;
-		bool_t alert_on:1;
-		bool_t alert_off:1;
-		bool_t start_counter_request:1;
-		bool_t start_counter_fail:1;
-		bool_t start_to_request_nmea_data:1;
-	};
-	struct {
-		uint8_t all_flags:6;
-	};
-
-}flags_t;
-
-typedef struct _tracker_fsm_ {
-	uart_t buff;
-	uint32_t counter_request;
-	uint16_t counter_fail;
-	uint16_t counter_request_nmea_data;
-	uint16_t *time;
-	tracker_states_t state;
-	tracker_events_t event;
-	flags_t flag;
-
-
-}tracker_fsm_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TIME_TO_START_SYSTEM	(	   5000		)
-#define TIME_NEEDED_TO_ALARM	(		200		)
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -116,8 +62,7 @@ static void MX_TIM3_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
-void tracker_fsm_init ( tracker_fsm_t *fsm, but_fsm_t *but );
-void tracker_fsm_run ( tracker_fsm_t *fsm );
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -130,13 +75,24 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	}
 }
 
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+	if (huart->Instance == USART1) {
+		if (tracker.state == STATE_TRACKER_SEND_REQUEST_GPS) {
+			//HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 1);
+			tracker_set_event(&tracker, EVT_TRACKER_GPS_REQUEST_SENT);
+		}
+	}
+}
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	if (huart->Instance == USART1) {
+
 		if (tracker.state == STATE_TRACKER_WAITING_GPS_RESPONSE) {
-			HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 1);
 			tracker.flag.start_to_request_nmea_data = false;
-			HAL_UART_Transmit_IT(&huart2, tracker.buff.rx, SIZE);
+			memcpy(tracker.data, tracker.buff.rx, ENOUGH_DATA_BYTES);
+			memset(tracker.buff.rx, '\0', SIZE);
+			tracker_set_event(&tracker, EVT_TRACKER_GPS_RESPONSE_RECEIVED);
 		}
 	}
 }
@@ -168,14 +124,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		if ( tracker.counter_request_nmea_data >= 1000 ) {
 			tracker.counter_request_nmea_data = 0;
 			HAL_UART_Transmit_IT(&huart1, (uint8_t *)"AT+QGNSSRD=\"NMEA/RMC\"\r", strlen("AT+QGNSSRD=\"NMEA/RMC\"\r"));
-			tracker.event = EVT_TRACKER_GPS_REQUEST_SENT;
-			tracker.flag.new_event = true;
 		}
 
 		if ( tracker.state == STATE_TRACKER_IDLE ) {
 			if ( *tracker.time >= TIME_NEEDED_TO_ALARM ) { //two seconds
-				tracker.event = EVT_TRACKER_ALERT_ON;
-				tracker.flag.new_event = true;
+				tracker_set_event(&tracker, EVT_TRACKER_ALERT_ON);
 			}
 
 		}
@@ -187,8 +140,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 		}
 
 		if ( tracker.counter_request >= TIME_TO_START_SYSTEM ) {
-			tracker.event = EVT_TRACKER_TIMEOUT_REQUEST_GPS;
-			tracker.flag.new_event = true;
+			tracker_set_event(&tracker, EVT_TRACKER_TIMEOUT_REQUEST_GPS);
 		}
 
 	}
@@ -496,82 +448,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void tracker_fsm_init ( tracker_fsm_t *fsm, but_fsm_t *but ) {
-	fsm->buff.rx[SIZE-1] = '\0';
-	fsm->buff.tx[SIZE-1] = '\0';
-	fsm->state = STATE_TRACKER_IDLE;
-	fsm->event = EVT_TRACKER_NO_EVT;
-	fsm->time = &but->time_being_pressed;
-	fsm->counter_request_nmea_data = 0;
-	fsm->counter_fail = 0;
-	fsm->counter_request = 0;
-	fsm->flag.all_flags = 0x00;
-}
 
-void tracker_fsm_run ( tracker_fsm_t *fsm ) {
-	if( fsm->flag.new_event == true ) {
-		fsm->flag.new_event = false;
 
-		switch (fsm->state) {
 
-		case STATE_TRACKER_IDLE:
-			if (fsm->event == EVT_TRACKER_ALERT_ON) {
-				HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 1);
-				HAL_UART_Transmit(&huart1, (uint8_t *)"ATE0\r", strlen("ATE0\r"), 100); /* turn off echo mode */
-				HAL_UART_Transmit(&huart1, (uint8_t *)"AT+QGNSSC=1\r", strlen("AT+QGNSSC=1\r"), 100); /* turn on GNSS module */
-				fsm->flag.start_counter_request = true;
-				fsm->state = STATE_TRACKER_WAIT_FOR_REQUEST_GPS;
-				HAL_UART_Receive_IT(&huart1, tracker.buff.rx, 70);
-			}
-			break;
 
-		case STATE_TRACKER_WAIT_FOR_REQUEST_GPS:
 
-			if (fsm->event == EVT_TRACKER_TIMEOUT_REQUEST_GPS) {
-				HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, 0);
-				fsm->flag.start_counter_request = false;
-				fsm->flag.start_to_request_nmea_data = true;
-				HAL_UART_Receive_IT(&huart1, tracker.buff.rx, 70);
 
-				fsm->state = STATE_TRACKER_SEND_REQUEST_GPS;
-			}
-			break;
-
-		case STATE_TRACKER_SEND_REQUEST_GPS:
-
-			if (fsm->event == EVT_TRACKER_GPS_REQUEST_SENT) { /* transition state */
-
-				fsm->state = STATE_TRACKER_WAITING_GPS_RESPONSE;
-
-			}
-			break;
-
-		case STATE_TRACKER_WAITING_GPS_RESPONSE:
-
-			if (fsm->event == EVT_TRACKER_GPS_RESPONSE_RECEIVED) {
-
-			}
-			else if (fsm->event == EVT_TRACKER_GPS_REQUEST_SENT) { /* NOT RECEIVED */
-
-			}
-
-			break;
-
-		case STATE_TRACKER_RECEIVED_GPS:
-
-			break;
-
-		case STATE_TRACKER_GSM_SENDING:
-
-			break;
-
-		default: /* ERROR */
-
-			while(1);
-			break;
-		}
-	}
-}
 /* USER CODE END 4 */
 
 /**
